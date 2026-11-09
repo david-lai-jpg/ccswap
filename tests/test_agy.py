@@ -189,6 +189,39 @@ def test_ambiguous_or_failed_native_backend_fails_closed(provider, monkeypatch, 
         assert read_native() == before
 
 
+def test_stale_fallback_copy_of_keychain_login_is_moved_aside(provider):
+    # agy writes the file when one Keychain save fails and never removes it (2026-11-09).
+    two_accounts(provider)
+    fallback = Path.home() / agy._RELATIVE_AUTH
+    stale = auth("two@example.com")
+    stale["token"]["access_token"] = "synthetic-older-access"
+    provider._write(fallback, stale)
+
+    provider.switch_to("1")
+
+    assert read_native() == auth()
+    assert not fallback.exists()
+    moved = provider.backup_dir / "stale-fallback-token.json"
+    assert json.loads(moved.read_text()) == stale
+    if os.name != "nt":
+        assert moved.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("changes", [
+    {"token": {"access_token": "synthetic-access", "refresh_token": "synthetic-other-refresh"}},
+    {"id_token_email": "one@example.com"},
+])
+def test_fallback_with_other_refresh_token_or_account_still_blocks(provider, changes):
+    two_accounts(provider)
+    fallback = Path.home() / agy._RELATIVE_AUTH
+    provider._write(fallback, auth("two@example.com", **changes))
+    before = read_native()
+    with pytest.raises(agy.AgyError, match="Keychain and fallback file conflict"):
+        provider.switch_to("1")
+    assert read_native() == before
+    assert json.loads(fallback.read_text()) == auth("two@example.com", **changes)
+
+
 def test_oversized_target_rejected_before_native_write(provider, monkeypatch):
     native(auth(future_field="s" * 3000))
     provider.add_account()
