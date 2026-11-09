@@ -291,10 +291,20 @@ class AgyAccountSwitcher:
             credential = Credential.parse(document)
         if fallback.exists():
             file_credential = Credential.parse(_json_file(fallback))
-            if credential is None or file_credential.document != credential.document:
+            if (credential is None or file_credential.email != credential.email
+                    or file_credential.document["token"]["refresh_token"]
+                    != credential.document["token"]["refresh_token"]):
                 raise AgyError("Antigravity Keychain and fallback file conflict")
-            # A stale duplicate would become active if the Keychain later failed.
-            raise AgyError("Antigravity has both Keychain and fallback credentials; backend is ambiguous")
+            # agy leaves this file when one Keychain save fails and keeps reading the Keychain first.
+            # Same login and refresh token, so only a stale access token is set aside; left in place,
+            # it would become active if a later Keychain read failed after a switch.
+            stale = self.backup_dir / "stale-fallback-token.json"
+            try:
+                _private_dir(self.backup_dir)
+                os.replace(fallback, stale)
+                stale.chmod(0o600)
+            except OSError:
+                raise AgyError("Antigravity Keychain and fallback file conflict") from None
         return NativeLogin("keychain", credential)
 
     @staticmethod
